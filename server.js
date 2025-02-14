@@ -110,7 +110,8 @@ app.post("/intercom-webhook", async (req, res) => {
     //const slackChannelId = data.item.custom_attributes?.slack_channel;
 
     const slackChannelId = "C08DDDMT750";
-    const slackThreadTs = data.item.external_id;
+    // Remove 'api:' prefix from the external_id to get the Slack thread ts
+    const slackThreadTs = data.item.external_id?.replace("api:", "");
 
     // Verify we have the necessary Slack thread information
     if (!slackThreadTs || !slackChannelId) {
