@@ -26,6 +26,11 @@ app.post("/slack-events", async (req, res) => {
     const slackUserId = event.user;
     const slackMessage = event.text;
 
+    console.log(
+      "📝 Received Slack event payload:",
+      JSON.stringify(event, null, 2)
+    );
+
     try {
       // Create new Intercom conversation and store Slack thread info
       const intercomResponse = await axios.post(
@@ -48,6 +53,10 @@ app.post("/slack-events", async (req, res) => {
         }
       );
 
+      console.log(
+        "Intercom API Response:",
+        JSON.stringify(intercomResponse.data, null, 2)
+      );
       console.log(
         `✅ Intercom conversation created: ${intercomResponse.data.id}`
       );
