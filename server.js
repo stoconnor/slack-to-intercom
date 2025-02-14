@@ -2,48 +2,63 @@ require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const bodyParser = require("body-parser");
+const sqlite3 = require("sqlite3").verbose();
+const path = require("path");
 
 const app = express();
 app.use(bodyParser.json());
 
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
 const INTERCOM_TOKEN = process.env.INTERCOM_ACCESS_TOKEN;
-const INTERCOM_ADMIN_ID = process.env.INTERCOM_ADMIN_ID;
+
+// Initialize SQLite database
+const db = new sqlite3.Database(path.join(__dirname, "conversations.db"));
+
+// Create tables if they don't exist
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slack_thread_ts TEXT NOT NULL,
+      slack_channel_id TEXT NOT NULL,
+      intercom_conversation_id TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS processed_webhooks (
+      webhook_id TEXT PRIMARY KEY,
+      processed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+});
 
 // 1️⃣ Listen for new Slack messages
 app.post("/slack-events", async (req, res) => {
+  console.log("Received Slack request:", JSON.stringify(req.body, null, 2));
+
   const { event, challenge } = req.body;
 
-  // Handle Slack's verification challenge
   if (challenge) {
+    console.log("✅ Handling Slack verification challenge");
     return res.status(200).json({ challenge });
   }
 
-  // Only process new messages, not thread replies or other events
   if (event && event.type === "message" && !event.subtype) {
     const slackThreadTs = event.ts;
     const slackChannelId = event.channel;
     const slackUserId = event.user;
     const slackMessage = event.text;
 
-    console.log(
-      "📝 Received Slack event payload:",
-      JSON.stringify(event, null, 2)
-    );
-
     try {
-      // Create new Intercom conversation and store Slack thread info
+      // Create new Intercom conversation
       const intercomResponse = await axios.post(
         "https://api.intercom.io/conversations",
         {
-          from: { type: "user", id: INTERCOM_ADMIN_ID },
+          from: { type: "user", id: slackUserId },
           body: slackMessage,
           message_type: "inapp",
-          external_id: slackThreadTs, // Prevents duplicate conversations
-          custom_attributes: {
-            slack_thread_ts: slackThreadTs, // Store thread ID for replies
-            slack_channel: slackChannelId, // Store channel for replies
-          },
         },
         {
           headers: {
@@ -53,12 +68,24 @@ app.post("/slack-events", async (req, res) => {
         }
       );
 
-      console.log(
-        "Intercom API Response:",
-        JSON.stringify(intercomResponse.data, null, 2)
+      const intercomConversationId = intercomResponse.data.id;
+
+      // Save the mapping to database
+      db.run(
+        `INSERT INTO conversations (slack_thread_ts, slack_channel_id, intercom_conversation_id) 
+         VALUES (?, ?, ?)`,
+        [slackThreadTs, slackChannelId, intercomConversationId],
+        (err) => {
+          if (err) {
+            console.error("❌ Error saving to database:", err);
+          } else {
+            console.log("✅ Mapping saved to database");
+          }
+        }
       );
+
       console.log(
-        `✅ Intercom conversation created: ${intercomResponse.data.id}`
+        `✅ Intercom conversation created: ${intercomConversationId}`
       );
       return res.status(200).send("OK");
     } catch (error) {
@@ -73,7 +100,7 @@ app.post("/slack-events", async (req, res) => {
   return res.status(200).send("Ignored");
 });
 
-// 2️⃣ Listen for Intercom replies and send them to the original Slack thread
+// 2️⃣ Listen for Intercom replies
 app.post("/intercom-webhook", async (req, res) => {
   try {
     console.log(
@@ -81,7 +108,6 @@ app.post("/intercom-webhook", async (req, res) => {
       JSON.stringify(req.body, null, 2)
     );
 
-    // Handle Intercom's ping/test notification
     if (
       req.body.type === "notification_event" &&
       req.body.data?.item?.type === "ping"
@@ -92,48 +118,88 @@ app.post("/intercom-webhook", async (req, res) => {
         .json({ message: "Webhook test received successfully" });
     }
 
-    // Handle regular conversation updates
-    const { data } = req.body;
+    const webhookId = req.body.id;
 
-    // Get the latest reply from the conversation
-    const conversationPart =
-      data?.item?.conversation_parts?.conversation_parts[0];
-    if (!conversationPart) {
-      return res.status(400).json({ error: "No conversation part found" });
-    }
+    // Check if webhook was already processed
+    db.get(
+      "SELECT webhook_id FROM processed_webhooks WHERE webhook_id = ?",
+      [webhookId],
+      async (err, row) => {
+        if (err) {
+          console.error("❌ Error checking webhook status:", err);
+          return res.status(500).json({ error: "Database error" });
+        }
 
-    // Extract necessary information
-    const message = conversationPart.body || "No message content";
+        if (row) {
+          console.log("⚠️ Webhook already processed:", webhookId);
+          return res.status(200).json({ message: "Webhook already processed" });
+        }
 
-    //TODO: look into why these attributes are not saved?
-    //const slackThreadTs = data.item.custom_attributes?.slack_thread_ts;
-    //const slackChannelId = data.item.custom_attributes?.slack_channel;
+        const conversation = req.body.data?.item;
+        if (!conversation) {
+          return res.status(400).json({ error: "No conversation found" });
+        }
 
-    const slackChannelId = "C08DDDMT750";
-    // Remove 'api:' prefix from the external_id to get the Slack thread ts
-    const slackThreadTs = data.item.external_id?.replace("api:", "");
+        const conversationPart =
+          conversation.conversation_parts?.conversation_parts[0];
+        if (!conversationPart) {
+          return res.status(400).json({ error: "No conversation part found" });
+        }
 
-    // Verify we have the necessary Slack thread information
-    if (!slackThreadTs || !slackChannelId) {
-      console.log("❌ No Slack thread info found in Intercom conversation");
-      return res.status(400).json({ error: "Missing Slack thread metadata" });
-    }
+        const message = conversationPart.body || "No message content";
+        const intercomConversationId = conversation.id;
 
-    // Send the Intercom reply back to the original Slack thread
-    await axios.post(
-      "https://slack.com/api/chat.postMessage",
-      {
-        channel: slackChannelId,
-        thread_ts: slackThreadTs, // This ensures the message appears in the thread
-        text: message,
-      },
-      {
-        headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
+        // Get Slack details from database
+        db.get(
+          `SELECT slack_thread_ts, slack_channel_id 
+           FROM conversations 
+           WHERE intercom_conversation_id = ?`,
+          [intercomConversationId],
+          async (err, row) => {
+            if (err || !row) {
+              console.error(
+                "❌ Error retrieving Slack details:",
+                err || "No matching conversation found"
+              );
+              return res
+                .status(400)
+                .json({ error: "Conversation mapping not found" });
+            }
+
+            try {
+              // Send reply to Slack thread
+              await axios.post(
+                "https://slack.com/api/chat.postMessage",
+                {
+                  channel: row.slack_channel_id,
+                  thread_ts: row.slack_thread_ts,
+                  text: message,
+                },
+                {
+                  headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
+                }
+              );
+
+              // Mark webhook as processed
+              db.run("INSERT INTO processed_webhooks (webhook_id) VALUES (?)", [
+                webhookId,
+              ]);
+
+              console.log("✅ Reply sent to Slack thread");
+              return res.status(200).json({ success: true });
+            } catch (error) {
+              console.error(
+                "❌ Error sending Slack message:",
+                error.response?.data || error
+              );
+              return res
+                .status(500)
+                .json({ error: "Failed to send Slack message" });
+            }
+          }
+        );
       }
     );
-
-    console.log("✅ Reply sent to Slack thread");
-    return res.status(200).json({ success: true });
   } catch (error) {
     console.error(
       "❌ Error processing Intercom webhook:",
