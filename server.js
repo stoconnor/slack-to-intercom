@@ -11,6 +11,7 @@ app.use(bodyParser.json());
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
 const INTERCOM_TOKEN = process.env.INTERCOM_ACCESS_TOKEN;
 const INTERCOM_ADMIN_ID = process.env.INTERCOM_ADMIN_ID;
+const SLACK_BOT_USER_ID = process.env.SLACK_BOT_USER_ID;
 
 // Initialize SQLite database
 const db = new sqlite3.Database(path.join(__dirname, "conversations.db"));
@@ -20,9 +21,9 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS conversations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slack_thread_ts TEXT NOT NULL,
+      slack_thread_ts TEXT UNIQUE NOT NULL,
       slack_channel_id TEXT NOT NULL,
-      intercom_conversation_id TEXT NOT NULL,
+      intercom_conversation_id TEXT UNIQUE NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -46,7 +47,15 @@ app.post("/slack-events", async (req, res) => {
     return res.status(200).json({ challenge });
   }
 
-  if (event && event.type === "message" && !event.subtype) {
+  // Ignore messages from our bot
+  if (event.user === SLACK_BOT_USER_ID) {
+    console.log("⚠️ Ignoring message from our bot");
+    return res.status(200).send("Ignored bot message");
+  }
+
+  // Only process new messages, not thread replies
+  if (event && event.type === "message" && !event.subtype && !event.thread_ts) {
+    // Ignore thread replies
     const slackThreadTs = event.ts;
     const slackChannelId = event.channel;
     const slackUserId = event.user;
@@ -120,6 +129,12 @@ app.post("/intercom-webhook", async (req, res) => {
     }
 
     const webhookId = req.body.id;
+    console.log("Processing webhook ID:", webhookId);
+
+    if (!webhookId) {
+      console.log("⚠️ No webhook ID found in payload");
+      return res.status(400).json({ error: "Missing webhook ID" });
+    }
 
     // Check if webhook was already processed
     db.get(
@@ -183,7 +198,27 @@ app.post("/intercom-webhook", async (req, res) => {
                 message: message,
               });
 
-              // Send reply to Slack thread
+              // Move the webhook processing record to BEFORE sending to Slack
+              await new Promise((resolve, reject) => {
+                db.run(
+                  "INSERT INTO processed_webhooks (webhook_id) VALUES (?)",
+                  [webhookId],
+                  (err) => {
+                    if (err) {
+                      console.error(
+                        "❌ Error marking webhook as processed:",
+                        err
+                      );
+                      reject(err);
+                    } else {
+                      console.log("✅ Marked webhook as processed:", webhookId);
+                      resolve();
+                    }
+                  }
+                );
+              });
+
+              // Now send to Slack
               const slackResponse = await axios.post(
                 "https://slack.com/api/chat.postMessage",
                 {
@@ -205,11 +240,6 @@ app.post("/intercom-webhook", async (req, res) => {
               if (!slackResponse.data.ok) {
                 throw new Error(`Slack API Error: ${slackResponse.data.error}`);
               }
-
-              // Mark webhook as processed
-              db.run("INSERT INTO processed_webhooks (webhook_id) VALUES (?)", [
-                webhookId,
-              ]);
 
               console.log("✅ Reply sent to Slack thread");
               return res.status(200).json({ success: true });
