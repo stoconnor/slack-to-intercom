@@ -11,7 +11,7 @@ const INTERCOM_TOKEN = process.env.INTERCOM_ACCESS_TOKEN;
 const INTERCOM_ADMIN_ID = process.env.INTERCOM_ADMIN_ID;
 
 // 1️⃣ Listen for new Slack messages
-app.post("/slack-events", async (req, res) => {
+app.get("/slack-events", async (req, res) => {
   const { event, challenge } = req.body;
 
   // Handle Slack's verification challenge
