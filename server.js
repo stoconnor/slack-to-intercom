@@ -136,11 +136,6 @@ app.post("/intercom-webhook", async (req, res) => {
           return res.status(200).json({ message: "Webhook already processed" });
         }
 
-        const conversation = req.body.data?.item;
-        if (!conversation) {
-          return res.status(400).json({ error: "No conversation found" });
-        }
-
         const conversationPart =
           conversation.conversation_parts?.conversation_parts[0];
         if (!conversationPart) {
@@ -148,7 +143,7 @@ app.post("/intercom-webhook", async (req, res) => {
         }
 
         const message = conversationPart.body || "No message content";
-        const intercomConversationId = conversation.id;
+        const intercomConversationId = req.body.data?.item.source.id;
 
         // Get Slack details from database
         db.get(
