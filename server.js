@@ -104,8 +104,13 @@ app.post("/intercom-webhook", async (req, res) => {
 
     // Extract necessary information
     const message = conversationPart.body || "No message content";
-    const slackThreadTs = data.item.custom_attributes?.slack_thread_ts;
-    const slackChannelId = data.item.custom_attributes?.slack_channel;
+
+    //TODO: look into why these attributes are not saved?
+    //const slackThreadTs = data.item.custom_attributes?.slack_thread_ts;
+    //const slackChannelId = data.item.custom_attributes?.slack_channel;
+
+    const slackChannelId = "C08DDDMT750";
+    const slackThreadTs = data.item.external_id;
 
     // Verify we have the necessary Slack thread information
     if (!slackThreadTs || !slackChannelId) {
