@@ -148,7 +148,10 @@ app.post("/intercom-webhook", async (req, res) => {
         }
 
         const message = conversationPart.body || "No message content";
-        const intercomConversationId = req.body.data?.item.source.id;
+        const intercomConversationId = conversation.source.id;
+
+        // Add debug logging
+        console.log("Looking up conversation with ID:", intercomConversationId);
 
         // Get Slack details from database
         db.get(
@@ -162,14 +165,26 @@ app.post("/intercom-webhook", async (req, res) => {
                 "❌ Error retrieving Slack details:",
                 err || "No matching conversation found"
               );
+              // Add more debug info
+              console.log(
+                "Database lookup failed for conversation ID:",
+                intercomConversationId
+              );
               return res
                 .status(400)
                 .json({ error: "Conversation mapping not found" });
             }
 
             try {
+              // Add debug logging
+              console.log("Found Slack details:", {
+                channel: row.slack_channel_id,
+                thread_ts: row.slack_thread_ts,
+                message: message,
+              });
+
               // Send reply to Slack thread
-              await axios.post(
+              const slackResponse = await axios.post(
                 "https://slack.com/api/chat.postMessage",
                 {
                   channel: row.slack_channel_id,
@@ -180,6 +195,16 @@ app.post("/intercom-webhook", async (req, res) => {
                   headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
                 }
               );
+
+              // Log Slack's response
+              console.log(
+                "Slack API Response:",
+                JSON.stringify(slackResponse.data, null, 2)
+              );
+
+              if (!slackResponse.data.ok) {
+                throw new Error(`Slack API Error: ${slackResponse.data.error}`);
+              }
 
               // Mark webhook as processed
               db.run("INSERT INTO processed_webhooks (webhook_id) VALUES (?)", [
