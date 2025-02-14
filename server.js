@@ -67,19 +67,28 @@ app.post("/slack-events", async (req, res) => {
 // 2️⃣ Listen for Intercom replies and send them to the original Slack thread
 app.post("/intercom-webhook", async (req, res) => {
   try {
-    const { data, test } = req.body;
+    console.log(
+      "📝 Received Intercom webhook payload:",
+      JSON.stringify(req.body, null, 2)
+    );
 
-    // Handle Intercom's test webhook
-    if (test) {
+    // Handle Intercom's ping/test notification
+    if (
+      req.body.type === "notification_event" &&
+      req.body.data?.item?.type === "ping"
+    ) {
       console.log("✅ Intercom Webhook Test Request Received");
       return res
         .status(200)
         .json({ message: "Webhook test received successfully" });
     }
 
+    // Handle regular conversation updates
+    const { data } = req.body;
+
     // Get the latest reply from the conversation
     const conversationPart =
-      data.item.conversation_parts?.conversation_parts[0];
+      data?.item?.conversation_parts?.conversation_parts[0];
     if (!conversationPart) {
       return res.status(400).json({ error: "No conversation part found" });
     }
