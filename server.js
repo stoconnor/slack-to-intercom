@@ -36,7 +36,7 @@ app.post("/slack-events", async (req, res) => {
       const intercomResponse = await axios.post(
         "https://api.intercom.io/conversations",
         {
-          from: { type: "user", id: slackUserId },
+          from: { type: "user", id: INTERCOM_ADMIN_ID },
           body: slackMessage,
           message_type: "inapp",
           external_id: slackThreadTs, // Prevents duplicate conversations
