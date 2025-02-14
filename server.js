@@ -107,57 +107,50 @@ app.post("/intercom-webhook", async (req, res) => {
   }
 });
 
-// ✅ 3️⃣ LISTEN FOR SLACK THREAD REPLIES & SEND TO INTERCOM
-app.post("/slack-replies", async (req, res) => {
-  const { event } = req.body;
+app.post("/slack-events", async (req, res) => {
+  const { event, challenge } = req.body;
 
-  if (event && event.type === "message" && event.thread_ts) {
-    const slackThreadTs = event.thread_ts;
-    const slackMessage = event.text;
+  // ✅ Handle Slack's verification challenge
+  if (challenge) {
+    return res.status(200).json({ challenge });
+  }
+
+  // ✅ Handle new messages
+  if (event && event.type === "message" && !event.subtype) {
+    const slackThreadTs = event.ts; // Unique Slack message timestamp
+    const slackChannelId = event.channel;
     const slackUserId = event.user;
+    const slackMessage = event.text;
 
     try {
-      // ✅ Find Intercom Conversation Using `external_id`
-      const intercomSearch = await axios.post(
-        "https://api.intercom.io/conversations/search",
+      // ✅ Create a New Conversation in Intercom (Avoid Duplicates)
+      const intercomResponse = await axios.post(
+        "https://api.intercom.io/conversations",
         {
-          query: { field: "external_id", operator: "=", value: slackThreadTs },
-        },
-        {
-          headers: {
-            Authorization: INTERCOM_TOKEN,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      if (!intercomSearch.data.conversations.length) {
-        return res.status(404).send("No matching Intercom conversation");
-      }
-
-      const intercomConversationId = intercomSearch.data.conversations[0].id;
-
-      // ✅ Reply to Intercom Conversation
-      await axios.post(
-        `https://api.intercom.io/conversations/${intercomConversationId}/reply`,
-        {
-          type: "admin",
-          admin_id: INTERCOM_ADMIN_ID,
-          message_type: "comment",
+          from: { type: "user", id: slackUserId },
           body: slackMessage,
+          message_type: "inapp",
+          external_id: slackThreadTs,
+          custom_attributes: {
+            slack_thread_ts: slackThreadTs,
+            slack_channel: slackChannelId,
+          },
         },
         {
           headers: {
-            Authorization: INTERCOM_TOKEN,
+            Authorization: process.env.INTERCOM_ACCESS_TOKEN,
             "Content-Type": "application/json",
           },
         }
       );
 
+      console.log(
+        `✅ Intercom conversation created: ${intercomResponse.data.id}`
+      );
       res.status(200).send("OK");
     } catch (error) {
       console.error(
-        "❌ Error sending Slack reply to Intercom:",
+        "❌ Error creating Intercom conversation:",
         error.response?.data || error
       );
       res.status(500).send("Error");
