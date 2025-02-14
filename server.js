@@ -61,42 +61,49 @@ app.post("/slack-events", async (req, res) => {
 // ✅ 2️⃣ LISTEN FOR INTERCOM REPLIES & SEND THEM TO SLACK THREAD
 app.post("/intercom-webhook", async (req, res) => {
   try {
-    const { data } = req.body;
+    const { data, test } = req.body; // Intercom sends "test": true in test requests
+
+    if (test) {
+      console.log("✅ Intercom Webhook Test Request Received.");
+      return res
+        .status(200)
+        .json({ message: "Webhook test received successfully." });
+    }
+
+    // ✅ Handle real webhook events
     const conversationId = data.item.id;
     const adminName =
-      data.item.conversation_parts.conversation_parts[0].author.name;
-    const message = data.item.conversation_parts.conversation_parts[0].body;
-    const slackThreadTs = data.item.custom_attributes.slack_thread_ts;
-    const slackChannelId = data.item.custom_attributes.slack_channel;
+      data.item.conversation_parts?.conversation_parts[0]?.author?.name ||
+      "Unknown";
+    const message =
+      data.item.conversation_parts?.conversation_parts[0]?.body ||
+      "No message content.";
+    const slackThreadTs = data.item.custom_attributes?.slack_thread_ts;
+    const slackChannelId = data.item.custom_attributes?.slack_channel;
 
     if (!slackThreadTs || !slackChannelId) {
       console.log("❌ No Slack thread info found.");
-      return res.status(400).send("No Slack thread info");
+      return res.status(400).json({ error: "Missing Slack thread metadata" });
     }
 
-    // ✅ Post Intercom Reply in Slack Thread
+    // ✅ Send Intercom reply to Slack thread
     await axios.post(
       "https://slack.com/api/chat.postMessage",
       {
         channel: slackChannelId,
         thread_ts: slackThreadTs,
-        text: `📝 *Intercom Admin Reply:* \n👤 *${adminName}* \n💬 ${message}`,
+        text: message,
       },
-      {
-        headers: {
-          Authorization: `Bearer ${SLACK_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-      }
+      { headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` } }
     );
 
-    res.status(200).send("OK");
+    res.status(200).json({ success: true });
   } catch (error) {
     console.error(
-      "❌ Error sending message to Slack:",
+      "❌ Error processing Intercom webhook:",
       error.response?.data || error
     );
-    res.status(500).send("Error");
+    res.status(500).json({ error: "Failed to process webhook" });
   }
 });
 
