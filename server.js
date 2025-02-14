@@ -10,6 +10,7 @@ app.use(bodyParser.json());
 
 const SLACK_TOKEN = process.env.SLACK_BOT_TOKEN;
 const INTERCOM_TOKEN = process.env.INTERCOM_ACCESS_TOKEN;
+const INTERCOM_ADMIN_ID = process.env.INTERCOM_ADMIN_ID;
 
 // Initialize SQLite database
 const db = new sqlite3.Database(path.join(__dirname, "conversations.db"));
@@ -56,7 +57,7 @@ app.post("/slack-events", async (req, res) => {
       const intercomResponse = await axios.post(
         "https://api.intercom.io/conversations",
         {
-          from: { type: "user", id: slackUserId },
+          from: { type: "user", id: INTERCOM_ADMIN_ID },
           body: slackMessage,
           message_type: "inapp",
         },
